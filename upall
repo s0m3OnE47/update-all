@@ -2,13 +2,14 @@
 
 # Ubuntu System Update Script
 # This script updates the Ubuntu system using various package managers
-# Usage: sudo upall
+# Usage: sudo upall [--verbose|-v]
 
 # Set script variables
 SCRIPT_DIR="/opt/update-all"
 LOG_FILE="$SCRIPT_DIR/update_log.txt"
 ERROR_COUNT=0
 TOTAL_COMMANDS=7
+VERBOSE=false
 
 # Colors for output
 RED='\033[0;31m'
@@ -24,6 +25,31 @@ print_status() {
     echo -e "${color}${message}${NC}"
 }
 
+# Function to parse command line arguments
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -h|--help)
+                echo "Usage: sudo upall [--verbose|-v]"
+                echo ""
+                echo "Options:"
+                echo "  -v, --verbose    Show detailed output on terminal as well as in log file"
+                echo "  -h, --help       Show this help message"
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                echo "Use -h or --help for usage information"
+                exit 1
+                ;;
+        esac
+    done
+}
+
 # Function to log command output
 log_command() {
     local command=$1
@@ -36,13 +62,26 @@ log_command() {
     echo "===========================================" >> "$LOG_FILE"
 
     # Run command and capture both stdout and stderr
-    if eval "$command" >> "$LOG_FILE" 2>&1; then
-        print_status $GREEN "✓ Success: $description"
-        echo "Status: SUCCESS" >> "$LOG_FILE"
+    if [[ "$VERBOSE" == "true" ]]; then
+        # In verbose mode, show output on terminal and log to file
+        if eval "$command" 2>&1 | tee -a "$LOG_FILE"; then
+            print_status $GREEN "✓ Success: $description"
+            echo "Status: SUCCESS" >> "$LOG_FILE"
+        else
+            print_status $RED "✗ Failed: $description"
+            echo "Status: FAILED" >> "$LOG_FILE"
+            ((ERROR_COUNT++))
+        fi
     else
-        print_status $RED "✗ Failed: $description"
-        echo "Status: FAILED" >> "$LOG_FILE"
-        ((ERROR_COUNT++))
+        # Normal mode, only log to file
+        if eval "$command" >> "$LOG_FILE" 2>&1; then
+            print_status $GREEN "✓ Success: $description"
+            echo "Status: SUCCESS" >> "$LOG_FILE"
+        else
+            print_status $RED "✗ Failed: $description"
+            echo "Status: FAILED" >> "$LOG_FILE"
+            ((ERROR_COUNT++))
+        fi
     fi
 
     echo "" >> "$LOG_FILE"
@@ -80,13 +119,20 @@ display_summary() {
         print_status $YELLOW "Check the log file for details: $LOG_FILE"
     fi
 
-    print_status $BLUE "Verbose output saved to: $LOG_FILE"
+    if [[ "$VERBOSE" == "true" ]]; then
+        print_status $BLUE "Verbose mode: Output displayed on terminal and saved to: $LOG_FILE"
+    else
+        print_status $BLUE "Verbose output saved to: $LOG_FILE"
+    fi
     print_status $BLUE "Completed: $(date)"
     print_status $BLUE "==========================================="
 }
 
 # Main execution
 main() {
+    # Parse command line arguments
+    parse_arguments "$@"
+
     # Check if running as root
     check_root
 

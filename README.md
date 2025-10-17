@@ -18,6 +18,13 @@ This script performs a complete system update on Ubuntu by running various updat
    sudo upall
    ```
 
+   **With verbose output:**
+   ```bash
+   sudo upall -v
+   # or
+   sudo upall --verbose
+   ```
+
 ## 📁 File Structure
 
 ```
@@ -59,6 +66,7 @@ This script performs a complete system update on Ubuntu by running various updat
   - All command output saved to `/opt/update-all/update_log.txt`
   - Log file is replaced on each run
   - Includes timestamps and command status
+  - **Verbose mode**: Display output on terminal AND save to log file
 
 - **⚠️ Error Handling**:
   - Tracks failed commands
@@ -79,6 +87,22 @@ This script performs a complete system update on Ubuntu by running various updat
 ### Basic Usage
 ```bash
 sudo upall
+```
+
+### Verbose Mode
+```bash
+# Show detailed output on terminal while also logging to file
+sudo upall -v
+# or
+sudo upall --verbose
+```
+
+### Help
+```bash
+# Show usage information and available options
+sudo upall -h
+# or
+sudo upall --help
 ```
 
 ### Manual Setup (Alternative to setup.sh)
