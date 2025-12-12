@@ -8,7 +8,7 @@
 SCRIPT_DIR="/opt/update-all"
 LOG_FILE="$SCRIPT_DIR/update_log.txt"
 ERROR_COUNT=0
-TOTAL_COMMANDS=7
+TOTAL_COMMANDS=8
 VERBOSE=false
 
 # Colors for output
@@ -95,6 +95,69 @@ check_root() {
     fi
 }
 
+# Function to ensure update-git-repos is available
+ensure_update_git_repos() {
+    # Check if update-git-repos is already in PATH
+    if command -v update-git-repos &> /dev/null; then
+        return 0
+    fi
+
+    print_status $YELLOW "⚠ update-git-repos not found, installing..."
+
+    # Check if git is installed
+    if ! command -v git &> /dev/null; then
+        print_status $RED "✗ Git is not installed. Cannot clone update-git-repos repository."
+        print_status $YELLOW "⚠ Skipping update-git-repos installation"
+        return 1
+    fi
+
+    # Get the actual user (not root)
+    local actual_user="${SUDO_USER:-$USER}"
+    local repo_dir="/opt/update-git-repos"
+    local script_path="$repo_dir/src/update_repos.py"
+    local symlink_path="/usr/bin/update-git-repos"
+
+    # Clone the repository
+    if [ -d "$repo_dir" ]; then
+        print_status $YELLOW "⚠ Directory $repo_dir already exists, removing it first..."
+        rm -rf "$repo_dir"
+    fi
+
+    print_status $BLUE "Cloning update-git-repos repository..."
+    if git clone https://github.com/s0m3OnE47/update-git-repos "$repo_dir" >> "$LOG_FILE" 2>&1; then
+        print_status $GREEN "✓ Repository cloned successfully"
+    else
+        print_status $RED "✗ Failed to clone repository"
+        return 1
+    fi
+
+    # Make the script executable
+    if chmod +x "$script_path" >> "$LOG_FILE" 2>&1; then
+        print_status $GREEN "✓ Made script executable"
+    else
+        print_status $RED "✗ Failed to make script executable"
+        return 1
+    fi
+
+    # Set ownership to the actual user
+    if chown -R "$actual_user:$actual_user" "$repo_dir" >> "$LOG_FILE" 2>&1; then
+        print_status $GREEN "✓ Set ownership to $actual_user"
+    else
+        print_status $YELLOW "⚠ Failed to set ownership (non-critical)"
+    fi
+
+    # Create symlink
+    if ln -sf "$script_path" "$symlink_path" >> "$LOG_FILE" 2>&1; then
+        print_status $GREEN "✓ Created symlink at $symlink_path"
+    else
+        print_status $RED "✗ Failed to create symlink"
+        return 1
+    fi
+
+    print_status $GREEN "✓ update-git-repos installed successfully"
+    return 0
+}
+
 # Function to create log file header
 create_log_header() {
     echo "===========================================" > "$LOG_FILE"
@@ -147,6 +210,9 @@ main() {
     # Create log file header
     create_log_header
 
+    # Ensure update-git-repos is available
+    ensure_update_git_repos
+
     # Update package lists
     log_command "apt update -y" "Update package lists"
 
@@ -160,7 +226,7 @@ main() {
     log_command "snap refresh" "Update snap packages"
 
     # Update Cursor (if available)
-    log_command "update-cursor" "Update Cursor editor"
+    log_command "update-cursor --no-progress-bar" "Update Cursor editor"
 
     # Additional Ubuntu update commands
     log_command "apt full-upgrade -y" "Full system upgrade (handles dependencies)"
@@ -171,6 +237,18 @@ main() {
         log_command "flatpak update -y" "Update Flatpak packages"
     else
         print_status $YELLOW "⚠ Flatpak not installed, skipping Flatpak updates"
+    fi
+
+    # Update git repositories (if available)
+    if command -v update-git-repos &> /dev/null; then
+        local actual_user="${SUDO_USER:-$USER}"
+        if [[ "$actual_user" != "root" ]] && id "$actual_user" &>/dev/null; then
+            log_command "sudo -u $actual_user update-git-repos" "Update git repositories"
+        else
+            log_command "update-git-repos" "Update git repositories"
+        fi
+    else
+        print_status $YELLOW "⚠ update-git-repos not available, skipping git repository updates"
     fi
 
     # Check if reboot is required
@@ -184,6 +262,13 @@ main() {
 
     # Display final summary
     display_summary
+
+    # # Summarize the update log with Ollama (if installed)
+    # if ollama --version >/dev/null 2>&1; then
+    #     cat /opt/update-all/update_log.txt | ollama run gpt-oss:20b "You are given an update log for the System update & upgrade script. Using only this log, summarize the changes to system in a concise list: Important packages that were updated, which were removed, snap packages updated, cursor version updated from and to, flatpack update, miscellaneous changes. The output is displayed on the terminal, hence avoid using markdown formatting."
+    # else
+    #     print_status $YELLOW "⚠ Ollama not installed, skipping summary"
+    # fi
 
     # Exit with appropriate code
     if [[ $ERROR_COUNT -eq 0 ]]; then
