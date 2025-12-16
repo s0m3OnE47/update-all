@@ -95,6 +95,47 @@ check_root() {
     fi
 }
 
+# Function to get the actual non-root user
+get_actual_user() {
+    local user=""
+
+    # Method 0: Check if user is explicitly set via environment variable
+    if [[ -n "$UPDATE_GIT_REPOS_USER" ]] && [[ "$UPDATE_GIT_REPOS_USER" != "root" ]]; then
+        if id "$UPDATE_GIT_REPOS_USER" &>/dev/null; then
+            echo "$UPDATE_GIT_REPOS_USER"
+            return 0
+        fi
+    fi
+
+    # Method 1: Check SUDO_USER (most reliable when using sudo)
+    if [[ -n "$SUDO_USER" ]] && [[ "$SUDO_USER" != "root" ]]; then
+        user="$SUDO_USER"
+    # Method 2: Get username from SUDO_UID
+    elif [[ -n "$SUDO_UID" ]]; then
+        user=$(id -nu "$SUDO_UID" 2>/dev/null)
+    # Method 3: Use logname command (shows the login name of the user)
+    elif command -v logname &> /dev/null; then
+        user=$(logname 2>/dev/null)
+    # Method 4: Try to get user from who command
+    elif command -v who &> /dev/null; then
+        user=$(who -m | awk '{print $1}' 2>/dev/null)
+    # Method 5: Check the owner of the home directory (if running from a user's home)
+    elif [[ -n "$HOME" ]] && [[ "$HOME" != "/root" ]]; then
+        user=$(stat -c '%U' "$HOME" 2>/dev/null)
+    # Method 6: Check USER variable (last resort, but usually root when using sudo)
+    elif [[ -n "$USER" ]] && [[ "$USER" != "root" ]]; then
+        user="$USER"
+    fi
+
+    # Validate the user exists and is not root
+    if [[ -n "$user" ]] && [[ "$user" != "root" ]] && id "$user" &>/dev/null; then
+        echo "$user"
+        return 0
+    fi
+
+    return 1
+}
+
 # Function to ensure update-git-repos is available
 ensure_update_git_repos() {
     # Check if update-git-repos is already in PATH
@@ -241,14 +282,30 @@ main() {
 
     # Update git repositories (if available)
     if command -v update-git-repos &> /dev/null; then
-        local actual_user="${SUDO_USER:-$USER}"
-        if [[ "$actual_user" != "root" ]] && id "$actual_user" &>/dev/null; then
+        # Get the actual non-root user using multiple detection methods
+        local actual_user
+        if actual_user=$(get_actual_user); then
+            # Always run as the actual user, never as root
             log_command "sudo -u $actual_user update-git-repos" "Update git repositories"
         else
-            log_command "update-git-repos" "Update git repositories"
+            print_status $YELLOW "⚠ Cannot determine non-root user, skipping git repository updates"
+            print_status $YELLOW "⚠ update-git-repos must be run as a non-root user"
+            print_status $YELLOW "⚠ You can specify the user by setting: UPDATE_GIT_REPOS_USER=yourusername"
+            print_status $YELLOW "⚠ Example: sudo UPDATE_GIT_REPOS_USER=yourusername upall"
+            echo "===========================================" >> "$LOG_FILE"
+            echo "Command: update-git-repos" >> "$LOG_FILE"
+            echo "Timestamp: $(date)" >> "$LOG_FILE"
+            echo "Status: SKIPPED - Cannot determine non-root user" >> "$LOG_FILE"
+            echo "Debug: SUDO_USER=$SUDO_USER, SUDO_UID=$SUDO_UID, USER=$USER, UPDATE_GIT_REPOS_USER=$UPDATE_GIT_REPOS_USER" >> "$LOG_FILE"
+            echo "" >> "$LOG_FILE"
         fi
     else
         print_status $YELLOW "⚠ update-git-repos not available, skipping git repository updates"
+        echo "===========================================" >> "$LOG_FILE"
+        echo "Command: update-git-repos" >> "$LOG_FILE"
+        echo "Timestamp: $(date)" >> "$LOG_FILE"
+        echo "Status: SKIPPED - Command not found in PATH" >> "$LOG_FILE"
+        echo "" >> "$LOG_FILE"
     fi
 
     # Check if reboot is required
