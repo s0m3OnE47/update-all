@@ -42,7 +42,7 @@ This script performs a complete system update on Ubuntu by running various updat
 - **`apt upgrade -y`** - Upgrades all installed packages to their latest versions
 - **`apt autoremove -y`** - Removes packages that are no longer needed
 - **`snap refresh`** - Updates all installed snap packages
-- **`update-cursor`** - Updates the Cursor editor (if available)
+- **`/opt/update-cursor/bin/update-cursor`** - Updates the Cursor editor (if available)
 
 ### Additional Update Commands
 - **`apt full-upgrade -y`** - Performs a more comprehensive upgrade that handles changing dependencies
@@ -174,7 +174,7 @@ Completed: Mon Jan 15 10:35:00 UTC 2024
    - Check that the script has execute permissions
 
 2. **Command Not Found**
-   - Some commands like `update-cursor` or `flatpak` may not be installed
+   - Some commands like `/opt/update-cursor/bin/update-cursor` or `flatpak` may not be installed
    - The script will skip unavailable commands and continue
 
 3. **Network Issues**

@@ -267,7 +267,7 @@ main() {
     log_command "snap refresh" "Update snap packages"
 
     # Update Cursor (if available)
-    log_command "update-cursor --no-progress-bar" "Update Cursor editor"
+    log_command "/opt/update-cursor/bin/update-cursor --no-progress-bar" "Update Cursor editor"
 
     # Additional Ubuntu update commands
     log_command "apt full-upgrade -y" "Full system upgrade (handles dependencies)"
