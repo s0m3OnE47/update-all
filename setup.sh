@@ -34,13 +34,35 @@ else
     print_status $YELLOW "⚠ Symlink already exists: /usr/bin/upall"
 fi
 
-# Ensure script is executable
+# Ensure scripts are executable
 chmod +x /opt/update-all/upall
-print_status $GREEN "✓ Made script executable"
+print_status $GREEN "✓ Made upall executable"
+
+chmod +x /opt/update-all/update_appimages.py
+print_status $GREEN "✓ Made update_appimages.py executable"
 
 # Create log directory if it doesn't exist
 mkdir -p /opt/update-all
 print_status $GREEN "✓ Ensured log directory exists"
+
+# Create config.env with the non-root user for git repo updates (cron/systemd runs)
+CONFIG_FILE="/opt/update-all/config.env"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    TARGET_USER="${SUDO_USER:-$(stat -c '%U' /opt/update-all 2>/dev/null)}"
+    if [[ -n "$TARGET_USER" ]] && [[ "$TARGET_USER" != "root" ]]; then
+        echo "UPDATE_GIT_REPOS_USER=$TARGET_USER" > "$CONFIG_FILE"
+        chmod 644 "$CONFIG_FILE"
+        print_status $GREEN "✓ Created config.env with UPDATE_GIT_REPOS_USER=$TARGET_USER"
+    fi
+fi
+
+# Create symlink for AppImage updater
+if [ ! -L /usr/bin/update-appimages ]; then
+    ln -s /opt/update-all/update_appimages.py /usr/bin/update-appimages
+    print_status $GREEN "✓ Created symlink: /usr/bin/update-appimages -> /opt/update-all/update_appimages.py"
+else
+    print_status $YELLOW "⚠ Symlink already exists: /usr/bin/update-appimages"
+fi
 
 print_status $BLUE "==========================================="
 print_status $GREEN "Setup completed successfully!"

@@ -1,0 +1,7 @@
+github_repo,name,download_url,asset_match,enabled
+bambulab/BambuStudio,BambuStudio,,,true
+freecad/freecad,FreeCAD,,,true
+Heroic-Games-Launcher/HeroicGamesLauncher,Heroic,,,true
+arduino/arduino-ide,Arduino-IDE,,,true
+,LMStudio,https://lmstudio.ai/download/latest/linux/x64,,true
+obsidianmd/obsidian-releases,Obsidian,,true

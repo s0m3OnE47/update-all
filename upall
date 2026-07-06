@@ -8,7 +8,7 @@
 SCRIPT_DIR="/opt/update-all"
 LOG_FILE="$SCRIPT_DIR/update_log.txt"
 ERROR_COUNT=0
-TOTAL_COMMANDS=8
+TOTAL_COMMANDS=10
 VERBOSE=false
 
 # Colors for output
@@ -95,41 +95,86 @@ check_root() {
     fi
 }
 
+# Return 0 when $1 is a non-root local user that exists
+is_valid_user() {
+    [[ -n "$1" ]] && [[ "$1" != "root" ]] && id "$1" &>/dev/null
+}
+
+# Load optional machine-local settings (e.g. UPDATE_GIT_REPOS_USER)
+load_config() {
+    local config_file="$SCRIPT_DIR/config.env"
+    if [[ -f "$config_file" ]]; then
+        # shellcheck source=/dev/null
+        set -a
+        source "$config_file"
+        set +a
+    fi
+}
+
 # Function to get the actual non-root user
 get_actual_user() {
     local user=""
 
-    # Method 0: Check if user is explicitly set via environment variable
-    if [[ -n "$UPDATE_GIT_REPOS_USER" ]] && [[ "$UPDATE_GIT_REPOS_USER" != "root" ]]; then
-        if id "$UPDATE_GIT_REPOS_USER" &>/dev/null; then
-            echo "$UPDATE_GIT_REPOS_USER"
+    # Method 0: explicit env/config
+    if is_valid_user "$UPDATE_GIT_REPOS_USER"; then
+        echo "$UPDATE_GIT_REPOS_USER"
+        return 0
+    fi
+
+    # Method 1: SUDO_USER (most reliable when using sudo)
+    if is_valid_user "$SUDO_USER"; then
+        echo "$SUDO_USER"
+        return 0
+    fi
+
+    # Method 2: username from SUDO_UID
+    if [[ -n "$SUDO_UID" ]]; then
+        user=$(id -nu "$SUDO_UID" 2>/dev/null)
+        if is_valid_user "$user"; then
+            echo "$user"
             return 0
         fi
     fi
 
-    # Method 1: Check SUDO_USER (most reliable when using sudo)
-    if [[ -n "$SUDO_USER" ]] && [[ "$SUDO_USER" != "root" ]]; then
-        user="$SUDO_USER"
-    # Method 2: Get username from SUDO_UID
-    elif [[ -n "$SUDO_UID" ]]; then
-        user=$(id -nu "$SUDO_UID" 2>/dev/null)
-    # Method 3: Use logname command (shows the login name of the user)
-    elif command -v logname &> /dev/null; then
+    # Method 3: logname (may return root when invoked as root — try next methods if so)
+    if command -v logname &> /dev/null; then
         user=$(logname 2>/dev/null)
-    # Method 4: Try to get user from who command
-    elif command -v who &> /dev/null; then
-        user=$(who -m | awk '{print $1}' 2>/dev/null)
-    # Method 5: Check the owner of the home directory (if running from a user's home)
-    elif [[ -n "$HOME" ]] && [[ "$HOME" != "/root" ]]; then
-        user=$(stat -c '%U' "$HOME" 2>/dev/null)
-    # Method 6: Check USER variable (last resort, but usually root when using sudo)
-    elif [[ -n "$USER" ]] && [[ "$USER" != "root" ]]; then
-        user="$USER"
+        if is_valid_user "$user"; then
+            echo "$user"
+            return 0
+        fi
     fi
 
-    # Validate the user exists and is not root
-    if [[ -n "$user" ]] && [[ "$user" != "root" ]] && id "$user" &>/dev/null; then
-        echo "$user"
+    # Method 4: active TTY session user
+    if command -v who &> /dev/null; then
+        user=$(who -m | awk '{print $1}' 2>/dev/null)
+        if is_valid_user "$user"; then
+            echo "$user"
+            return 0
+        fi
+    fi
+
+    # Method 5: owner of the script directory (cron/systemd root runs)
+    if [[ -n "$SCRIPT_DIR" ]] && [[ -d "$SCRIPT_DIR" ]]; then
+        user=$(stat -c '%U' "$SCRIPT_DIR" 2>/dev/null)
+        if is_valid_user "$user"; then
+            echo "$user"
+            return 0
+        fi
+    fi
+
+    # Method 6: owner of a non-root home directory
+    if [[ -n "$HOME" ]] && [[ "$HOME" != "/root" ]]; then
+        user=$(stat -c '%U' "$HOME" 2>/dev/null)
+        if is_valid_user "$user"; then
+            echo "$user"
+            return 0
+        fi
+    fi
+
+    # Method 7: USER variable (last resort)
+    if is_valid_user "$USER"; then
+        echo "$USER"
         return 0
     fi
 
@@ -152,8 +197,13 @@ ensure_update_git_repos() {
         return 1
     fi
 
-    # Get the actual user (not root)
-    local actual_user="${SUDO_USER:-$USER}"
+    # Get the actual non-root user (needed for ownership)
+    local actual_user=""
+    if actual_user=$(get_actual_user); then
+        :
+    else
+        actual_user=""
+    fi
     local repo_dir="/opt/update-git-repos"
     local script_path="$repo_dir/src/update_repos.py"
     local symlink_path="/usr/bin/update-git-repos"
@@ -180,11 +230,15 @@ ensure_update_git_repos() {
         return 1
     fi
 
-    # Set ownership to the actual user
-    if chown -R "$actual_user:$actual_user" "$repo_dir" >> "$LOG_FILE" 2>&1; then
-        print_status $GREEN "✓ Set ownership to $actual_user"
+    # Set ownership to the actual user (if determinable)
+    if [[ -n "$actual_user" ]]; then
+        if chown -R "$actual_user:$actual_user" "$repo_dir" >> "$LOG_FILE" 2>&1; then
+            print_status $GREEN "✓ Set ownership to $actual_user"
+        else
+            print_status $YELLOW "⚠ Failed to set ownership (non-critical)"
+        fi
     else
-        print_status $YELLOW "⚠ Failed to set ownership (non-critical)"
+        print_status $YELLOW "⚠ Could not determine non-root user for ownership; leaving as current owner"
     fi
 
     # Create symlink
@@ -240,6 +294,9 @@ main() {
     # Check if running as root
     check_root
 
+    # Load machine-local config before user detection
+    load_config
+
     # Clear screen and show header
     clear
     print_status $BLUE "==========================================="
@@ -280,13 +337,32 @@ main() {
         print_status $YELLOW "⚠ Flatpak not installed, skipping Flatpak updates"
     fi
 
+    # Renew TLS certificates (aniketdhere.com, life.aniketdhere.com, folio.aniketdhere.com)
+    if command -v certbot &> /dev/null; then
+        log_command "certbot renew --quiet --deploy-hook 'systemctl reload nginx'" "Renew Let's Encrypt certificates"
+    else
+        print_status $YELLOW "⚠ certbot not installed, skipping certificate renewal"
+    fi
+
+    # Update AppImage applications (if available)
+    if command -v update-appimages &> /dev/null && command -v install-appimage &> /dev/null; then
+        log_command "update-appimages" "Update AppImage applications"
+    else
+        print_status $YELLOW "⚠ update-appimages or install-appimage not available, skipping AppImage updates"
+        echo "===========================================" >> "$LOG_FILE"
+        echo "Command: update-appimages" >> "$LOG_FILE"
+        echo "Timestamp: $(date)" >> "$LOG_FILE"
+        echo "Status: SKIPPED - Command not found in PATH" >> "$LOG_FILE"
+        echo "" >> "$LOG_FILE"
+    fi
+
     # Update git repositories (if available)
     if command -v update-git-repos &> /dev/null; then
         # Get the actual non-root user using multiple detection methods
         local actual_user
         if actual_user=$(get_actual_user); then
             # Always run as the actual user, never as root
-            log_command "sudo -u $actual_user update-git-repos" "Update git repositories"
+            log_command "sudo -u \"$actual_user\" -H update-git-repos" "Update git repositories"
         else
             print_status $YELLOW "⚠ Cannot determine non-root user, skipping git repository updates"
             print_status $YELLOW "⚠ update-git-repos must be run as a non-root user"
