@@ -32,7 +32,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CSV = SCRIPT_DIR / "appimages.csv"
 DOWNLOAD_DIR = SCRIPT_DIR / "downloads"
 GITHUB_TOKEN_FILE = SCRIPT_DIR / "github_token.env"
-GITHUB_API = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
+GITHUB_LATEST_API = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
+GITHUB_RELEASES_API = "https://api.github.com/repos/{owner}/{repo}/releases"
+RELEASE_SCAN_PER_PAGE = 30
 RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504}
 DEFAULT_MAX_RETRIES = 5
 DEFAULT_RETRY_BACKOFF_SEC = 2.0
@@ -488,7 +490,7 @@ def resolve_direct_download(url: str, verbose: bool = False) -> dict:
     }
 
 
-def github_request(url: str, verbose: bool = False) -> dict:
+def github_request(url: str, verbose: bool = False):
     headers = {
         "Accept": "application/vnd.github+json",
         **default_request_headers(),
@@ -499,13 +501,58 @@ def github_request(url: str, verbose: bool = False) -> dict:
         return json.load(response)
 
 
-def pick_appimage_asset(release: dict, asset_match: str) -> dict:
-    assets = [
+def release_appimage_assets(release: dict) -> list[dict]:
+    return [
         asset for asset in release.get("assets", [])
         if asset.get("name", "").lower().endswith(".appimage")
     ]
+
+
+def fetch_release_with_appimage(owner: str, repo: str, verbose: bool = False) -> dict:
+    """Return the newest non-draft release that publishes at least one AppImage.
+
+    Some projects (e.g. Obsidian) publish platform-specific patch releases whose
+    /releases/latest tag has no desktop AppImage; scan recent releases instead.
+    """
+    latest_url = GITHUB_LATEST_API.format(owner=owner, repo=repo)
+    if verbose:
+        Logger.dim(f"  API: {latest_url}")
+
+    latest = github_request(latest_url, verbose=verbose)
+    if release_appimage_assets(latest):
+        return latest
+
+    tag = latest.get("tag_name", "unknown")
+    Logger.dim(f"  Latest release {tag} has no AppImage; scanning recent releases...")
+
+    releases_url = (
+        f"{GITHUB_RELEASES_API.format(owner=owner, repo=repo)}"
+        f"?per_page={RELEASE_SCAN_PER_PAGE}"
+    )
+    if verbose:
+        Logger.dim(f"  API: {releases_url}")
+
+    releases = github_request(releases_url, verbose=verbose)
+    if not isinstance(releases, list):
+        raise RuntimeError(f"unexpected GitHub releases response for {owner}/{repo}")
+
+    for release in releases:
+        if release.get("draft"):
+            continue
+        if release_appimage_assets(release):
+            found_tag = release.get("tag_name", "unknown")
+            Logger.dim(f"  Using release {found_tag} (has AppImage assets)")
+            return release
+
+    raise RuntimeError(
+        f"no AppImage assets found in latest or recent releases for {owner}/{repo}"
+    )
+
+
+def pick_appimage_asset(release: dict, asset_match: str) -> dict:
+    assets = release_appimage_assets(release)
     if not assets:
-        raise RuntimeError("no AppImage assets found in latest release")
+        raise RuntimeError("no AppImage assets found in selected release")
 
     assets = filter_assets_by_architecture(assets)
     if len(assets) == 1:
@@ -543,6 +590,15 @@ def pick_appimage_asset(release: dict, asset_match: str) -> dict:
     if len(assets) == 1:
         Logger.warning(f"Using only available AppImage asset: {assets[0]['name']}")
         return assets[0]
+
+    # qBittorrent (and similar) publish both libtorrent 1.2 and lt20 builds;
+    # prefer the default non-lt20 asset when both remain.
+    without_lt20 = [
+        asset for asset in assets if "_lt20" not in asset["name"].lower()
+    ]
+    if len(without_lt20) == 1:
+        Logger.dim(f"  Selected default (non-lt20) asset: {without_lt20[0]['name']}")
+        return without_lt20[0]
 
     raise RuntimeError(
         "could not choose AppImage asset; candidates: "
@@ -780,11 +836,7 @@ def fetch_appimage_asset(entry: AppImageEntry, verbose: bool = False) -> tuple[d
         return asset, asset["version_label"]
 
     owner, repo = entry.owner_repo
-    api_url = GITHUB_API.format(owner=owner, repo=repo)
-    if verbose:
-        Logger.dim(f"  API: {api_url}")
-
-    release = github_request(api_url, verbose=verbose)
+    release = fetch_release_with_appimage(owner, repo, verbose=verbose)
     tag_name = release.get("tag_name", "unknown")
     asset_match = entry.asset_match or detect_ubuntu_asset_match()
     asset = pick_appimage_asset(release, asset_match)
