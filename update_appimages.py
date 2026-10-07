@@ -740,6 +740,23 @@ def install_appimage_uses_canonical_name() -> bool:
     return "dest_appimage = app_dir / name" in Path(script).read_text(encoding="utf-8")
 
 
+def replace_executable(source: Path, destination: Path) -> None:
+    """Install source over destination even if destination is currently running.
+
+    Direct overwrite (e.g. shutil.copy2) raises ETXTBSY when the target binary
+    is mapped for execution. Copy to a same-dir tempfile, then os.replace().
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_name(f".{destination.name}.tmp.{os.getpid()}")
+    try:
+        shutil.copy2(source, tmp)
+        tmp.chmod(0o755)
+        os.replace(tmp, destination)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
 def install_canonical_appimage(
     entry: AppImageEntry,
     source_appimage: Path,
@@ -765,7 +782,7 @@ def install_canonical_appimage(
     entry.install_dir.mkdir(parents=True, exist_ok=True)
 
     if source_appimage.resolve() != dest_binary.resolve():
-        shutil.copy2(source_appimage, dest_binary)
+        replace_executable(source_appimage, dest_binary)
     dest_binary.chmod(0o755)
 
     if legacy_binary.is_file() and legacy_binary.resolve() != dest_binary.resolve():

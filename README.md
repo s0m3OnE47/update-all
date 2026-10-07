@@ -48,6 +48,7 @@ This script performs a complete system update on Ubuntu by running various updat
 - **`apt full-upgrade -y`** - Performs a more comprehensive upgrade that handles changing dependencies
 - **`apt autoclean`** - Cleans the package cache to free up disk space
 - **`flatpak update -y`** - Updates Flatpak packages (if Flatpak is installed)
+- **`hermes update -y`** - Updates the Hermes agent (if installed for the non-root user)
 
 ### System Checks
 - **Reboot Detection** - Checks if a system reboot is required after updates
