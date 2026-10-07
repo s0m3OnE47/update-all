@@ -388,10 +388,24 @@ main() {
         echo "" >> "$LOG_FILE"
     fi
 
-    # Update Hermes agent (user install under ~/.local/bin)
-    local actual_user hermes_bin user_home
+    # Update Grok Bot (apt package from downloads.cursor.com)
+    if dpkg-query -W -f='${Status}' grok-bot 2>/dev/null | grep -q "install ok installed"; then
+        log_command "apt-get install -y --only-upgrade grok-bot" "Update Grok Bot"
+    else
+        print_status $YELLOW "⚠ grok-bot not installed, skipping Grok Bot update"
+        echo "===========================================" >> "$LOG_FILE"
+        echo "Command: apt-get install -y --only-upgrade grok-bot" >> "$LOG_FILE"
+        echo "Timestamp: $(date)" >> "$LOG_FILE"
+        echo "Status: SKIPPED - grok-bot package not installed" >> "$LOG_FILE"
+        echo "" >> "$LOG_FILE"
+    fi
+
+    # Update user-installed CLI agents (Hermes, OpenClaw, OpenCode, Muse)
+    local actual_user user_home
+    local hermes_bin openclaw_bin opencode_bin muse_bin nvm_bin_dir
     if actual_user=$(get_actual_user); then
         user_home=$(getent passwd "$actual_user" | cut -d: -f6)
+
         hermes_bin="${user_home}/.local/bin/hermes"
         if [[ -x "$hermes_bin" ]]; then
             # Always run as the actual user; -y keeps cron/sudo runs non-interactive
@@ -404,12 +418,64 @@ main() {
             echo "Status: SKIPPED - hermes not found at $hermes_bin" >> "$LOG_FILE"
             echo "" >> "$LOG_FILE"
         fi
+
+        # OpenClaw is typically an npm global under nvm; node must be on PATH for updates
+        openclaw_bin=""
+        nvm_bin_dir=""
+        if [[ -d "${user_home}/.nvm/versions/node" ]]; then
+            openclaw_bin="$(find "${user_home}/.nvm/versions/node" -path '*/bin/openclaw' 2>/dev/null | sort -V | tail -1)"
+            if [[ -n "$openclaw_bin" ]]; then
+                nvm_bin_dir="$(dirname "$openclaw_bin")"
+            fi
+        fi
+        if [[ -z "$openclaw_bin" && -x "${user_home}/.local/bin/openclaw" ]]; then
+            openclaw_bin="${user_home}/.local/bin/openclaw"
+        fi
+        if [[ -x "$openclaw_bin" ]]; then
+            if [[ -n "$nvm_bin_dir" ]]; then
+                log_command "sudo -u \"$actual_user\" -H env PATH=\"$nvm_bin_dir:\$PATH\" \"$openclaw_bin\" update --yes" "Update OpenClaw"
+            else
+                log_command "sudo -u \"$actual_user\" -H \"$openclaw_bin\" update --yes" "Update OpenClaw"
+            fi
+        else
+            print_status $YELLOW "⚠ openclaw not found for $actual_user, skipping OpenClaw update"
+            echo "===========================================" >> "$LOG_FILE"
+            echo "Command: openclaw update --yes" >> "$LOG_FILE"
+            echo "Timestamp: $(date)" >> "$LOG_FILE"
+            echo "Status: SKIPPED - openclaw not found under nvm or ~/.local/bin" >> "$LOG_FILE"
+            echo "" >> "$LOG_FILE"
+        fi
+
+        opencode_bin="${user_home}/.opencode/bin/opencode"
+        if [[ -x "$opencode_bin" ]]; then
+            log_command "sudo -u \"$actual_user\" -H \"$opencode_bin\" upgrade" "Update OpenCode"
+        else
+            print_status $YELLOW "⚠ opencode not found for $actual_user, skipping OpenCode update"
+            echo "===========================================" >> "$LOG_FILE"
+            echo "Command: opencode upgrade" >> "$LOG_FILE"
+            echo "Timestamp: $(date)" >> "$LOG_FILE"
+            echo "Status: SKIPPED - opencode not found at $opencode_bin" >> "$LOG_FILE"
+            echo "" >> "$LOG_FILE"
+        fi
+
+        muse_bin="${user_home}/.local/bin/muse"
+        if [[ -x "$muse_bin" ]]; then
+            # MUSE_LAUNCHER_INSTALL=1 syncs the launcher/binary and exits without starting the TUI
+            log_command "sudo -u \"$actual_user\" -H env MUSE_LAUNCHER_INSTALL=1 \"$muse_bin\"" "Update Muse"
+        else
+            print_status $YELLOW "⚠ muse not found for $actual_user, skipping Muse update"
+            echo "===========================================" >> "$LOG_FILE"
+            echo "Command: MUSE_LAUNCHER_INSTALL=1 muse" >> "$LOG_FILE"
+            echo "Timestamp: $(date)" >> "$LOG_FILE"
+            echo "Status: SKIPPED - muse not found at $muse_bin" >> "$LOG_FILE"
+            echo "" >> "$LOG_FILE"
+        fi
     else
-        print_status $YELLOW "⚠ Cannot determine non-root user, skipping Hermes update"
-        print_status $YELLOW "⚠ hermes must be run as a non-root user"
+        print_status $YELLOW "⚠ Cannot determine non-root user, skipping user CLI agent updates"
+        print_status $YELLOW "⚠ Hermes/OpenClaw/OpenCode/Muse must be run as a non-root user"
         print_status $YELLOW "⚠ You can specify the user by setting: UPDATE_GIT_REPOS_USER=yourusername"
         echo "===========================================" >> "$LOG_FILE"
-        echo "Command: hermes update -y" >> "$LOG_FILE"
+        echo "Command: hermes/openclaw/opencode/muse updates" >> "$LOG_FILE"
         echo "Timestamp: $(date)" >> "$LOG_FILE"
         echo "Status: SKIPPED - Cannot determine non-root user" >> "$LOG_FILE"
         echo "Debug: SUDO_USER=$SUDO_USER, SUDO_UID=$SUDO_UID, USER=$USER, UPDATE_GIT_REPOS_USER=$UPDATE_GIT_REPOS_USER" >> "$LOG_FILE"
