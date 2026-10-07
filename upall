@@ -400,9 +400,9 @@ main() {
         echo "" >> "$LOG_FILE"
     fi
 
-    # Update user-installed CLI agents (Hermes, OpenClaw, OpenCode, Muse)
+    # Update user-installed CLI agents (Hermes, OpenClaw, OpenCode, Muse, Pi)
     local actual_user user_home
-    local hermes_bin openclaw_bin opencode_bin muse_bin nvm_bin_dir
+    local hermes_bin openclaw_bin opencode_bin muse_bin pi_bin nvm_bin_dir
     if actual_user=$(get_actual_user); then
         user_home=$(getent passwd "$actual_user" | cut -d: -f6)
 
@@ -470,12 +470,25 @@ main() {
             echo "Status: SKIPPED - muse not found at $muse_bin" >> "$LOG_FILE"
             echo "" >> "$LOG_FILE"
         fi
+
+        pi_bin="${user_home}/.local/bin/pi"
+        if [[ -x "$pi_bin" ]]; then
+            # --all updates pi itself and installed extensions (e.g. pi-optchat)
+            log_command "sudo -u \"$actual_user\" -H \"$pi_bin\" update --all" "Update Pi and extensions"
+        else
+            print_status $YELLOW "⚠ pi not found for $actual_user, skipping Pi update"
+            echo "===========================================" >> "$LOG_FILE"
+            echo "Command: pi update --all" >> "$LOG_FILE"
+            echo "Timestamp: $(date)" >> "$LOG_FILE"
+            echo "Status: SKIPPED - pi not found at $pi_bin" >> "$LOG_FILE"
+            echo "" >> "$LOG_FILE"
+        fi
     else
         print_status $YELLOW "⚠ Cannot determine non-root user, skipping user CLI agent updates"
-        print_status $YELLOW "⚠ Hermes/OpenClaw/OpenCode/Muse must be run as a non-root user"
+        print_status $YELLOW "⚠ Hermes/OpenClaw/OpenCode/Muse/Pi must be run as a non-root user"
         print_status $YELLOW "⚠ You can specify the user by setting: UPDATE_GIT_REPOS_USER=yourusername"
         echo "===========================================" >> "$LOG_FILE"
-        echo "Command: hermes/openclaw/opencode/muse updates" >> "$LOG_FILE"
+        echo "Command: hermes/openclaw/opencode/muse/pi updates" >> "$LOG_FILE"
         echo "Timestamp: $(date)" >> "$LOG_FILE"
         echo "Status: SKIPPED - Cannot determine non-root user" >> "$LOG_FILE"
         echo "Debug: SUDO_USER=$SUDO_USER, SUDO_UID=$SUDO_UID, USER=$USER, UPDATE_GIT_REPOS_USER=$UPDATE_GIT_REPOS_USER" >> "$LOG_FILE"
