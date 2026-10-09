@@ -37,12 +37,19 @@ This script performs a complete system update on Ubuntu by running various updat
 
 ## 🔧 What the Script Does
 
+### Bootstrap (auto-install if missing)
+- **`update-cursor`** — clones `s0m3OnE47/update-cursor` into `/tmp`, then `sudo mv` to `/opt/update-cursor`
+- **`install-appImage`** — clones `s0m3OnE47/install-appImage` the same way and runs `make install`
+- **`bun`** — installs via `curl -fsSL https://bun.sh/install | bash` for the non-root user
+- **Cursor CLI** — installs via `curl https://cursor.com/install -fsS | bash` for the non-root user
+- **`update-git-repos`** — clones into `/tmp` then moves to `/opt` if not already on PATH
+
 ### Core Update Commands
 - **`apt update -y`** - Updates the package lists from repositories
 - **`apt upgrade -y`** - Upgrades all installed packages to their latest versions
 - **`apt autoremove -y`** - Removes packages that are no longer needed
 - **`snap refresh`** - Updates all installed snap packages
-- **`/opt/update-cursor/bin/update-cursor`** - Updates the Cursor editor (if available)
+- **`/opt/update-cursor/bin/update-cursor`** - Updates the Cursor editor (auto-installed if missing)
 
 ### Additional Update Commands
 - **`apt full-upgrade -y`** - Performs a more comprehensive upgrade that handles changing dependencies

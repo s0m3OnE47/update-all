@@ -183,6 +183,186 @@ get_actual_user() {
     return 1
 }
 
+# Clone a GitHub repo into /tmp, then sudo-move it to /opt
+# Usage: clone_repo_to_opt "owner/repo" "/opt/dest" ["dir-name"]
+clone_repo_to_opt() {
+    local github_path=$1
+    local dest_dir=$2
+    local repo_name=${3:-$(basename "$dest_dir")}
+    local actual_user=""
+    local tmp_base tmp_clone
+
+    if [[ -d "$dest_dir" ]]; then
+        return 0
+    fi
+
+    if ! command -v git &> /dev/null; then
+        print_status $RED "✗ Git is not installed. Cannot clone $repo_name"
+        return 1
+    fi
+
+    tmp_base=$(mktemp -d "/tmp/${repo_name}.XXXXXX")
+    tmp_clone="$tmp_base/$repo_name"
+
+    print_status $BLUE "Cloning $repo_name into /tmp..."
+    if ! git clone "https://github.com/${github_path}" "$tmp_clone" >> "$LOG_FILE" 2>&1; then
+        print_status $RED "✗ Failed to clone $repo_name"
+        rm -rf "$tmp_base"
+        return 1
+    fi
+
+    print_status $BLUE "Moving $repo_name to $dest_dir..."
+    mkdir -p "$(dirname "$dest_dir")"
+    if ! sudo mv "$tmp_clone" "$dest_dir" >> "$LOG_FILE" 2>&1; then
+        print_status $RED "✗ Failed to move $repo_name to $dest_dir"
+        rm -rf "$tmp_base"
+        return 1
+    fi
+    rm -rf "$tmp_base"
+
+    if actual_user=$(get_actual_user); then
+        if chown -R "$actual_user:$actual_user" "$dest_dir" >> "$LOG_FILE" 2>&1; then
+            print_status $GREEN "✓ Set ownership of $dest_dir to $actual_user"
+        else
+            print_status $YELLOW "⚠ Failed to set ownership of $dest_dir (non-critical)"
+        fi
+    fi
+
+    print_status $GREEN "✓ $repo_name installed at $dest_dir"
+    return 0
+}
+
+# Install Bun for the non-root user if missing
+ensure_bun() {
+    local actual_user user_home bun_bin
+
+    if command -v bun &> /dev/null; then
+        return 0
+    fi
+
+    if actual_user=$(get_actual_user); then
+        user_home=$(getent passwd "$actual_user" | cut -d: -f6)
+        bun_bin="${user_home}/.bun/bin/bun"
+        if [[ -x "$bun_bin" ]]; then
+            return 0
+        fi
+
+        print_status $YELLOW "⚠ bun not found, installing for $actual_user..."
+        if sudo -u "$actual_user" -H bash -c 'curl -fsSL https://bun.sh/install | bash' >> "$LOG_FILE" 2>&1; then
+            if [[ -x "$bun_bin" ]]; then
+                print_status $GREEN "✓ bun installed at $bun_bin"
+                return 0
+            fi
+            print_status $YELLOW "⚠ bun install finished but binary not found at $bun_bin"
+            return 1
+        fi
+        print_status $RED "✗ Failed to install bun"
+        return 1
+    fi
+
+    print_status $YELLOW "⚠ Cannot determine non-root user; installing bun as current user..."
+    if curl -fsSL https://bun.sh/install | bash >> "$LOG_FILE" 2>&1; then
+        print_status $GREEN "✓ bun installed"
+        return 0
+    fi
+    print_status $RED "✗ Failed to install bun"
+    return 1
+}
+
+# Ensure update-cursor is cloned under /opt and ready to run
+ensure_update_cursor() {
+    local repo_dir="/opt/update-cursor"
+    local bin_path="$repo_dir/bin/update-cursor"
+
+    if [[ ! -x "$bin_path" ]]; then
+        print_status $YELLOW "⚠ update-cursor not found, installing..."
+        if ! clone_repo_to_opt "s0m3OnE47/update-cursor" "$repo_dir" "update-cursor"; then
+            return 1
+        fi
+        if ! chmod +x "$bin_path" "$repo_dir/lib/main.py" >> "$LOG_FILE" 2>&1; then
+            print_status $RED "✗ Failed to make update-cursor executable"
+            return 1
+        fi
+    fi
+
+    # Bun is required by update-cursor's TypeScript updater
+    ensure_bun || print_status $YELLOW "⚠ bun install failed; update-cursor may fail"
+
+    return 0
+}
+
+# Ensure install-appimage is cloned under /opt and on PATH
+ensure_install_appimage() {
+    local repo_dir="/opt/install-appImage"
+    local script_path="$repo_dir/install-appimage"
+
+    if command -v install-appimage &> /dev/null; then
+        return 0
+    fi
+
+    print_status $YELLOW "⚠ install-appimage not found, installing..."
+
+    if [[ ! -d "$repo_dir" ]]; then
+        if ! clone_repo_to_opt "s0m3OnE47/install-appImage" "$repo_dir" "install-appImage"; then
+            return 1
+        fi
+    fi
+
+    if [[ ! -f "$script_path" ]]; then
+        print_status $RED "✗ install-appimage script missing at $script_path"
+        return 1
+    fi
+
+    chmod +x "$script_path" >> "$LOG_FILE" 2>&1 || true
+
+    if [[ -f "$repo_dir/Makefile" ]]; then
+        if make -C "$repo_dir" install >> "$LOG_FILE" 2>&1; then
+            print_status $GREEN "✓ install-appimage installed via make"
+            return 0
+        fi
+        print_status $YELLOW "⚠ make install failed, falling back to symlink"
+    fi
+
+    if ln -sf "$script_path" /usr/local/bin/install-appimage >> "$LOG_FILE" 2>&1; then
+        print_status $GREEN "✓ Created symlink at /usr/local/bin/install-appimage"
+        return 0
+    fi
+
+    print_status $RED "✗ Failed to install install-appimage"
+    return 1
+}
+
+# Ensure Cursor Agent CLI is installed for the non-root user
+ensure_cursor_cli() {
+    local actual_user user_home
+
+    if command -v agent &> /dev/null || command -v cursor-agent &> /dev/null; then
+        return 0
+    fi
+
+    if ! actual_user=$(get_actual_user); then
+        print_status $YELLOW "⚠ Cannot determine non-root user, skipping Cursor CLI install"
+        return 1
+    fi
+
+    user_home=$(getent passwd "$actual_user" | cut -d: -f6)
+    if [[ -x "${user_home}/.local/bin/agent" ]] || [[ -x "${user_home}/.local/bin/cursor-agent" ]]; then
+        return 0
+    fi
+
+    print_status $YELLOW "⚠ Cursor CLI not found, installing for $actual_user..."
+    if sudo -u "$actual_user" -H bash -c 'curl https://cursor.com/install -fsS | bash' >> "$LOG_FILE" 2>&1; then
+        if [[ -x "${user_home}/.local/bin/agent" ]] || [[ -x "${user_home}/.local/bin/cursor-agent" ]]; then
+            print_status $GREEN "✓ Cursor CLI installed"
+            return 0
+        fi
+        print_status $YELLOW "⚠ Cursor CLI install finished but agent binary not found"
+        return 1
+    fi
+    print_status $RED "✗ Failed to install Cursor CLI"
+    return 1
+}
+
 # Function to ensure update-git-repos is available
 ensure_update_git_repos() {
     # Check if update-git-repos is already in PATH
@@ -192,36 +372,21 @@ ensure_update_git_repos() {
 
     print_status $YELLOW "⚠ update-git-repos not found, installing..."
 
-    # Check if git is installed
-    if ! command -v git &> /dev/null; then
-        print_status $RED "✗ Git is not installed. Cannot clone update-git-repos repository."
-        print_status $YELLOW "⚠ Skipping update-git-repos installation"
-        return 1
-    fi
-
-    # Get the actual non-root user (needed for ownership)
-    local actual_user=""
-    if actual_user=$(get_actual_user); then
-        :
-    else
-        actual_user=""
-    fi
     local repo_dir="/opt/update-git-repos"
     local script_path="$repo_dir/src/update_repos.py"
     local symlink_path="/usr/bin/update-git-repos"
 
-    # Clone the repository
-    if [ -d "$repo_dir" ]; then
-        print_status $YELLOW "⚠ Directory $repo_dir already exists, removing it first..."
+    # Replace a broken/partial install so we can clone fresh
+    if [[ -d "$repo_dir" ]] && [[ ! -f "$script_path" ]]; then
+        print_status $YELLOW "⚠ Directory $repo_dir exists but is incomplete, removing it..."
         rm -rf "$repo_dir"
     fi
 
-    print_status $BLUE "Cloning update-git-repos repository..."
-    if git clone https://github.com/s0m3OnE47/update-git-repos "$repo_dir" >> "$LOG_FILE" 2>&1; then
-        print_status $GREEN "✓ Repository cloned successfully"
-    else
-        print_status $RED "✗ Failed to clone repository"
-        return 1
+    if [[ ! -d "$repo_dir" ]]; then
+        if ! clone_repo_to_opt "s0m3OnE47/update-git-repos" "$repo_dir" "update-git-repos"; then
+            print_status $YELLOW "⚠ Skipping update-git-repos installation"
+            return 1
+        fi
     fi
 
     # Make the script executable
@@ -230,17 +395,6 @@ ensure_update_git_repos() {
     else
         print_status $RED "✗ Failed to make script executable"
         return 1
-    fi
-
-    # Set ownership to the actual user (if determinable)
-    if [[ -n "$actual_user" ]]; then
-        if chown -R "$actual_user:$actual_user" "$repo_dir" >> "$LOG_FILE" 2>&1; then
-            print_status $GREEN "✓ Set ownership to $actual_user"
-        else
-            print_status $YELLOW "⚠ Failed to set ownership (non-critical)"
-        fi
-    else
-        print_status $YELLOW "⚠ Could not determine non-root user for ownership; leaving as current owner"
     fi
 
     # Create symlink
@@ -312,8 +466,12 @@ main() {
     # Create log file header
     create_log_header
 
-    # Ensure update-git-repos is available
+    # Ensure dependent tools/repos are available before updates
     ensure_update_git_repos
+    ensure_bun
+    ensure_update_cursor
+    ensure_install_appimage
+    ensure_cursor_cli
 
     # Update package lists
     log_command "apt update -y" "Update package lists"
@@ -328,7 +486,16 @@ main() {
     log_command "snap refresh" "Update snap packages"
 
     # Update Cursor (if available)
-    log_command "/opt/update-cursor/bin/update-cursor --no-progress-bar" "Update Cursor editor"
+    if [[ -x /opt/update-cursor/bin/update-cursor ]]; then
+        log_command "/opt/update-cursor/bin/update-cursor --no-progress-bar" "Update Cursor editor"
+    else
+        print_status $YELLOW "⚠ update-cursor not available, skipping Cursor updates"
+        echo "===========================================" >> "$LOG_FILE"
+        echo "Command: /opt/update-cursor/bin/update-cursor --no-progress-bar" >> "$LOG_FILE"
+        echo "Timestamp: $(date)" >> "$LOG_FILE"
+        echo "Status: SKIPPED - update-cursor not installed" >> "$LOG_FILE"
+        echo "" >> "$LOG_FILE"
+    fi
 
     # Additional Ubuntu update commands
     log_command "apt full-upgrade -y" "Full system upgrade (handles dependencies)"
