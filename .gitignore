@@ -1,3 +1,4 @@
 update_log.txt
 downloads/
 github_token.env
+__pycache__
